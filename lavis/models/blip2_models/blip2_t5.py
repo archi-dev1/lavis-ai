@@ -39,13 +39,13 @@ class Blip2T5(Blip2Base):
 
     def __init__(
         self,
-        vit_model="eva_clip_g",
+        vit_model="pvt_v2_b2",
         img_size=224,
         drop_path_rate=0,
         use_grad_checkpoint=False,
         vit_precision="fp16",
         freeze_vit=True,
-        num_query_token=32,
+        num_query_token=16,
         t5_model="google/flan-t5-xl",
         prompt="",
         max_txt_len=32,
