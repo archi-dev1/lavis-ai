@@ -41,11 +41,25 @@ from lavis.models.blip2_models.blip2_t5_instruct import Blip2T5Instruct
 from lavis.models.blip2_models.blip2_vicuna_instruct import Blip2VicunaInstruct
 from lavis.models.blip2_models.blip2_vicuna_xinstruct import Blip2VicunaXInstruct
 
-from lavis.models.blip_diffusion_models.blip_diffusion import BlipDiffusion
+try:
+    from lavis.models.blip_diffusion_models.blip_diffusion import BlipDiffusion
+except Exception as blip_diffusion_import_error:
+    BlipDiffusion = None
+    logging.warning(
+        "BlipDiffusion import skipped due to optional dependency/version issue: %s",
+        blip_diffusion_import_error,
+    )
 
 from lavis.models.pnp_vqa_models.pnp_vqa import PNPVQA
 from lavis.models.pnp_vqa_models.pnp_unifiedqav2_fid import PNPUnifiedQAv2FiD
-from lavis.models.img2prompt_models.img2prompt_vqa import Img2PromptVQA
+try:
+    from lavis.models.img2prompt_models.img2prompt_vqa import Img2PromptVQA
+except Exception as img2prompt_import_error:
+    Img2PromptVQA = None
+    logging.warning(
+        "Img2PromptVQA import skipped due to optional dependency/version issue: %s",
+        img2prompt_import_error,
+    )
 from lavis.models.med import XBertLMHeadDecoder
 from lavis.models.vit import VisionTransformerEncoder
 from lavis.models.clip_models.model import CLIP

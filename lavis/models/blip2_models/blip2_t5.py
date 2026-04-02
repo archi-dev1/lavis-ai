@@ -168,6 +168,7 @@ class Blip2T5(Blip2Base):
         length_penalty=1.0,
         num_captions=1,
         temperature=1,
+        no_repeat_ngram_size=0,
     ):
         """
         Args:
@@ -237,6 +238,7 @@ class Blip2T5(Blip2Base):
                 repetition_penalty=repetition_penalty,
                 length_penalty=length_penalty,
                 num_return_sequences=num_captions,
+                no_repeat_ngram_size=no_repeat_ngram_size,
             )
             output_text = self.t5_tokenizer.batch_decode(
                 outputs, skip_special_tokens=True

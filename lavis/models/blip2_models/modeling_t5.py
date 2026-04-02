@@ -34,9 +34,9 @@ from transformers.modeling_outputs import (
     Seq2SeqModelOutput,
 )
 from transformers.modeling_utils import PreTrainedModel
+from transformers.generation import GenerationMixin
 from transformers.pytorch_utils import (
     ALL_LAYERNORM_LAYERS,
-    find_pruneable_heads_and_indices,
     prune_linear_layer,
 )
 from transformers.utils import (
@@ -48,8 +48,25 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from transformers.utils.model_parallel_utils import assert_device_map, get_device_map
 from transformers.models.t5.configuration_t5 import T5Config
+
+# Compatibility shims for transformers v5+ (functions removed upstream)
+def find_pruneable_heads_and_indices(heads, n_heads, head_size, already_pruned_heads):
+    import torch as _torch
+    mask = _torch.ones(n_heads, head_size)
+    heads = set(heads) - already_pruned_heads
+    for head in heads:
+        head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+        mask[head] = 0
+    mask = mask.view(-1).contiguous().eq(1)
+    index = _torch.arange(len(mask))[mask].long()
+    return heads, index
+
+def assert_device_map(device_map, num_blocks):
+    pass
+
+def get_device_map(n_layers, devices):
+    return {i: devices[i * len(devices) // n_layers] for i in range(n_layers)}
 
 
 logger = logging.get_logger(__name__)
@@ -838,6 +855,17 @@ class T5PreTrainedModel(PreTrainedModel):
     is_parallelizable = True
     supports_gradient_checkpointing = True
     _no_split_modules = ["T5Block"]
+
+    def get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
+        """Compatibility shim: get_head_mask removed from PreTrainedModel in transformers v5."""
+        if head_mask is not None:
+            import torch as _t
+            head_mask = self._convert_head_mask_to_5d(head_mask, num_hidden_layers)
+            if is_attention_chunked:
+                head_mask = head_mask.unsqueeze(-1)
+        else:
+            head_mask = [None] * num_hidden_layers
+        return head_mask
 
     @property
     def dummy_inputs(self):
@@ -1646,7 +1674,7 @@ class T5Model(T5PreTrainedModel):
 @add_start_docstrings(
     """T5 Model with a `language modeling` head on top.""", T5_START_DOCSTRING
 )
-class T5ForConditionalGeneration(T5PreTrainedModel):
+class T5ForConditionalGeneration(T5PreTrainedModel, GenerationMixin):
     _keys_to_ignore_on_load_missing = [
         r"encoder.embed_tokens.weight",
         r"decoder.embed_tokens.weight",

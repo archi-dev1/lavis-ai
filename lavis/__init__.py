@@ -7,15 +7,31 @@
 
 import os
 import sys
+import logging
 
 from omegaconf import OmegaConf
 
 from lavis.common.registry import registry
 
-from lavis.datasets.builders import *
-from lavis.models import *
-from lavis.processors import *
-from lavis.tasks import *
+try:
+	from lavis.datasets.builders import *
+except Exception as e:
+	logging.warning("Optional lavis.datasets.builders import skipped: %s", e)
+
+try:
+	from lavis.models import *
+except Exception as e:
+	logging.warning("Optional lavis.models import skipped: %s", e)
+
+try:
+	from lavis.processors import *
+except Exception as e:
+	logging.warning("Optional lavis.processors import skipped: %s", e)
+
+try:
+	from lavis.tasks import *
+except Exception as e:
+	logging.warning("Optional lavis.tasks import skipped: %s", e)
 
 
 root_dir = os.path.dirname(os.path.abspath(__file__))

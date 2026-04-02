@@ -36,14 +36,22 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
-from transformers.modeling_utils import (
-    PreTrainedModel,
-    apply_chunking_to_forward,
-    find_pruneable_heads_and_indices,
-    prune_linear_layer,
-)
+from transformers.modeling_utils import PreTrainedModel
+from transformers.generation import GenerationMixin
+from transformers.pytorch_utils import apply_chunking_to_forward, prune_linear_layer
 from transformers.utils import logging
 from transformers.models.bert.configuration_bert import BertConfig
+
+def find_pruneable_heads_and_indices(heads, n_heads, head_size, already_pruned_heads):
+    """Compatibility shim for transformers v5+ where this was removed."""
+    mask = torch.ones(n_heads, head_size)
+    heads = set(heads) - already_pruned_heads
+    for head in heads:
+        head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+        mask[head] = 0
+    mask = mask.view(-1).contiguous().eq(1)
+    index = torch.arange(len(mask))[mask].long()
+    return heads, index
 
 logger = logging.get_logger(__name__)
 
@@ -661,6 +669,25 @@ class BertPreTrainedModel(PreTrainedModel):
     base_model_prefix = "bert"
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
+    @property
+    def all_tied_weights_keys(self):
+        """Compatibility with transformers v5+."""
+        tied = {}
+        if hasattr(self, '_tied_weights_keys') and self._tied_weights_keys:
+            for k in self._tied_weights_keys:
+                tied[k] = k
+        return tied
+
+    def get_head_mask(self, head_mask, num_hidden_layers, is_attention_chunked=False):
+        """Compatibility with transformers v5+ (removed from PreTrainedModel)."""
+        if head_mask is not None:
+            head_mask = self._convert_head_mask_to_5d(head_mask, num_hidden_layers)
+            if is_attention_chunked:
+                head_mask = head_mask.unsqueeze(-1)
+        else:
+            head_mask = [None] * num_hidden_layers
+        return head_mask
+
     def _init_weights(self, module):
         """Initialize the weights"""
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -965,10 +992,11 @@ class BertModel(BertPreTrainedModel):
         )
 
 
-class BertLMHeadModel(BertPreTrainedModel):
+class BertLMHeadModel(BertPreTrainedModel, GenerationMixin):
 
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids", r"predictions.decoder.bias"]
+    _tied_weights_keys = ["cls.predictions.decoder.weight"]
 
     def __init__(self, config):
         super().__init__(config)
