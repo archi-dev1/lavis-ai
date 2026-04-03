@@ -116,6 +116,22 @@ def install_dependencies():
     )
 
 
+def setup_api_token():
+    """Retrieve API_TOKEN from Colab Secrets and expose it as standard env vars."""
+    try:
+        from google.colab import userdata
+        api_key = userdata.get("API_TOKEN")
+    except Exception:
+        api_key = os.environ.get("API_TOKEN")
+    if api_key:
+        os.environ.setdefault("HF_TOKEN", api_key)
+        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", api_key)
+        print("API_TOKEN loaded from Colab Secrets.")
+    else:
+        print("API_TOKEN not found in Colab Secrets or environment (optional).")
+    return api_key
+
+
 def clone_repo():
     print("\n[2/8] Cloning repo...")
     if not REPO_DIR.exists():
@@ -601,6 +617,7 @@ def main():
     set_seed(SEED)
 
     install_dependencies()
+    setup_api_token()
     clone_repo()
     patch_repo_if_needed()
     setup_kaggle_credentials()
