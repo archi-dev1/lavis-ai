@@ -29,13 +29,32 @@ fi
 cd "${REPO_DIR}"
 
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
+# Install the package itself without repo-wide optional dependencies that are
+# unrelated to the COCO captioning workflow (for example, open3d).
+python -m pip install -e . --no-deps
 
-# Required for the PVT + QFormer LoRA training path used by train_coco_server.py.
+# Required for the PVT + QFormer LoRA COCO training/inference workflow.
 python -m pip install \
+    contexttimer \
+    decord \
+    einops>=0.4.1 \
+    fairscale==0.4.4 \
+    ftfy \
+    iopath \
+    omegaconf \
+    opencv-python-headless==4.5.5.64 \
+    packaging \
+    pandas \
+    pycocoevalcap \
+    pycocotools \
+    pyyaml_env_tag==0.1 \
+    scikit-image \
+    sentencepiece \
     "transformers==4.46.2" \
     "peft==0.13.2" \
     "timm==1.0.15" \
+    tqdm \
+    webdataset \
     kaggle
 
 MODE="${1:-all}"
