@@ -43,7 +43,8 @@ BATCH_SIZE_TRAIN    = 16          # per-GPU batch size (reduce if OOM)
 BATCH_SIZE_EVAL     = 32
 GRAD_ACCUM_STEPS    = 2           # effective batch = BATCH_SIZE_TRAIN * GRAD_ACCUM_STEPS
 NUM_WORKERS         = 4
-EPOCHS              = 10
+EPOCHS              = 15
+EARLY_STOP_PATIENCE = 3           # stop if val loss doesn't improve for N epochs
 LEARNING_RATE       = 1e-4
 MIN_LR              = 1e-6
 WARMUP_STEPS        = 500
@@ -449,6 +450,7 @@ def train(model, train_loader, val_loader, device, args):
     start_epoch = 0
     global_step = 0
     best_val_loss = float("inf")
+    epochs_without_improvement = 0
 
     # Resume from checkpoint
     if args.resume and Path(args.resume).exists():
@@ -542,6 +544,7 @@ def train(model, train_loader, val_loader, device, args):
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_without_improvement = 0
             best_path = OUTPUT_DIR / "best_model.pt"
             torch.save({
                 "model": model.state_dict(),
@@ -555,6 +558,17 @@ def train(model, train_loader, val_loader, device, args):
                 },
             }, best_path)
             logger.info(f"New best model saved: val_loss={best_val_loss:.4f}")
+        else:
+            epochs_without_improvement += 1
+            logger.info(
+                f"No improvement for {epochs_without_improvement}/{EARLY_STOP_PATIENCE} epoch(s)."
+            )
+            if epochs_without_improvement >= EARLY_STOP_PATIENCE:
+                logger.info(
+                    f"Early stopping triggered after {epoch+1} epochs "
+                    f"(val loss did not improve for {EARLY_STOP_PATIENCE} consecutive epochs)."
+                )
+                break
 
     logger.info(f"Training complete. Best val loss: {best_val_loss:.4f}")
     return best_val_loss
@@ -589,6 +603,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
     parser.add_argument("--lr", type=float, default=None, help="Override learning rate")
     parser.add_argument("--t5-model", type=str, default=None, help="Override T5 model name")
+    parser.add_argument("--patience", type=int, default=None, help="Early stopping patience (epochs without improvement)")
     return parser.parse_args()
 
 
@@ -596,7 +611,7 @@ def main():
     args = parse_args()
 
     # Allow CLI overrides
-    global BATCH_SIZE_TRAIN, EPOCHS, LEARNING_RATE, T5_MODEL
+    global BATCH_SIZE_TRAIN, EPOCHS, LEARNING_RATE, T5_MODEL, EARLY_STOP_PATIENCE
     if args.batch_size:
         BATCH_SIZE_TRAIN = args.batch_size
     if args.epochs:
@@ -605,6 +620,8 @@ def main():
         LEARNING_RATE = args.lr
     if args.t5_model:
         T5_MODEL = args.t5_model
+    if args.patience is not None:
+        EARLY_STOP_PATIENCE = args.patience
 
     set_seed(SEED)
 
