@@ -55,7 +55,8 @@ python -m pip install \
     "timm==1.0.15" \
     tqdm \
     webdataset \
-    kaggle
+    kaggle \
+    "easydict==1.9"
 
 MODE="${1:-all}"
 shift 2>/dev/null || true   # consume the mode arg; remaining args forwarded
