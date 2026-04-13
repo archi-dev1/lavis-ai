@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Full BLIP-2 + PVT v2 b2 + QFormer LoRA training on MS COCO (Karpathy splits).
+BLIP-2 + PVT v2 b2 + QFormer LoRA training on MS COCO (Karpathy splits).
 
-Designed to run on a college server via SSH.
+Training only — for inference see infer_coco_server.py.
 
 Usage:
     # 1. SSH into your server
@@ -17,9 +17,6 @@ Usage:
 
     # To resume from a checkpoint:
     python train_coco_server.py --resume /path/to/checkpoint.pt
-
-    # To run inference only on a saved checkpoint:
-    python train_coco_server.py --inference-only --resume /path/to/checkpoint.pt
 """
 
 from __future__ import annotations
@@ -54,12 +51,6 @@ WEIGHT_DECAY        = 0.05
 SEED                = 42
 MAX_TXT_LEN         = 40
 PROMPT              = "a photo of "
-
-# Generation settings
-NUM_BEAMS           = 5
-MAX_GEN_LENGTH      = 30
-MIN_GEN_LENGTH      = 5
-NO_REPEAT_NGRAM     = 3
 
 # Model settings
 VIT_MODEL           = "pvt_v2_b2"
@@ -330,89 +321,6 @@ class COCOKarpathyCaptionDataset:
         raise RuntimeError(f"Failed to load sample after {max_retries} retries")
 
 
-class COCOKarpathyEvalDataset_:
-    """Eval dataset — returns image + all reference captions for metrics."""
-
-    def __init__(self, ann_path, images_root, split, transform, prompt):
-        self.images_root = Path(images_root)
-        self.transform = transform
-        self.prompt = prompt
-        self.samples = []
-
-        with open(ann_path, "r") as f:
-            data = json.load(f)
-
-        # Group captions by image
-        image_captions: dict[str, list[str]] = {}
-
-        if isinstance(data, list):
-            entries = data
-        elif "annotations" in data:
-            entries = data["annotations"]
-        elif "images" in data:
-            entries = None
-            for img in data["images"]:
-                if img.get("split", "") != split:
-                    continue
-                fname = img.get("filename", "")
-                caps = [s["raw"].lower().strip() for s in img.get("sentences", [])]
-                if fname and caps:
-                    image_captions[fname] = caps
-        else:
-            entries = data if isinstance(data, list) else []
-
-        if entries is not None:
-            for ann in entries:
-                img = ann.get("image", "")
-                cap = ann.get("caption", "")
-                if isinstance(cap, list):
-                    cap = cap[0] if cap else ""
-                cap = str(cap).lower().strip()
-                if img and cap:
-                    image_captions.setdefault(img, []).append(cap)
-
-        for image_path, captions in image_captions.items():
-            self.samples.append({
-                "image": image_path,
-                "captions": captions,
-            })
-
-        logger.info(f"[{split.upper()} EVAL] Loaded {len(self.samples)} images")
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, index):
-        from PIL import Image as PILImage
-
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                ann = self.samples[index]
-                img_path = self.images_root / ann["image"]
-
-                if not img_path.exists():
-                    for sub in ("train2014", "val2014"):
-                        alt = self.images_root / sub / Path(ann["image"]).name
-                        if alt.exists():
-                            img_path = alt
-                            break
-
-                with PILImage.open(img_path) as img:
-                    img = img.convert("RGB")
-                    img_tensor = self.transform(img)
-
-                return {
-                    "image": img_tensor,
-                    "captions": ann["captions"],
-                    "image_path": ann["image"],
-                }
-            except Exception:
-                index = random.randint(0, len(self.samples) - 1)
-
-        raise RuntimeError(f"Failed to load eval sample after {max_retries} retries")
-
-
 def build_transforms(image_size):
     from torchvision import transforms
 
@@ -437,15 +345,6 @@ def collate_fn(batch):
     text_input = [b["text_input"] for b in batch]
     text_output = [b["text_output"] for b in batch]
     return {"image": images, "text_input": text_input, "text_output": text_output}
-
-
-def eval_collate_fn(batch):
-    import torch
-
-    images = torch.stack([b["image"] for b in batch])
-    captions = [b["captions"] for b in batch]
-    paths = [b["image_path"] for b in batch]
-    return {"image": images, "captions": captions, "image_path": paths}
 
 
 # ═════════════════════════════════════════════════════════════
@@ -681,78 +580,15 @@ def validate(model, val_loader, device):
 
 
 # ═════════════════════════════════════════════════════════════
-# 7. Inference — caption generation
-# ═════════════════════════════════════════════════════════════
-def run_inference(model, eval_loader, device, split_name="test", max_images=50):
-    """Generate captions for images and display results."""
-    import torch
-
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Generating captions on {split_name} set (up to {max_images} images)")
-    logger.info(f"{'='*60}")
-
-    model.eval()
-    results = []
-    count = 0
-
-    with torch.no_grad():
-        for batch in eval_loader:
-            if count >= max_images:
-                break
-
-            images = batch["image"].to(device, non_blocking=True)
-            ref_captions = batch["captions"]
-            image_paths = batch["image_path"]
-
-            generated = model.generate(
-                {"image": images, "prompt": PROMPT},
-                use_nucleus_sampling=False,
-                num_beams=NUM_BEAMS,
-                max_length=MAX_GEN_LENGTH,
-                min_length=MIN_GEN_LENGTH,
-                no_repeat_ngram_size=NO_REPEAT_NGRAM,
-            )
-
-            for i, (gen_cap, refs, img_path) in enumerate(
-                zip(generated, ref_captions, image_paths)
-            ):
-                if count >= max_images:
-                    break
-                count += 1
-                gen_cap = gen_cap.strip()
-                results.append({
-                    "image": img_path,
-                    "generated": gen_cap,
-                    "references": refs,
-                })
-
-                print(f"\n[{count}] Image: {img_path}")
-                print(f"    Generated:  {gen_cap}")
-                if refs:
-                    print(f"    Reference:  {refs[0]}")
-
-    # Save results to JSON
-    results_path = OUTPUT_DIR / f"captions_{split_name}.json"
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2)
-    logger.info(f"\nSaved {len(results)} captions to {results_path}")
-
-    model.train()
-    return results
-
-
-# ═════════════════════════════════════════════════════════════
-# 8. Main
+# 7. Main
 # ═════════════════════════════════════════════════════════════
 def parse_args():
     parser = argparse.ArgumentParser(description="BLIP-2 COCO Training (PVT + LoRA)")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
-    parser.add_argument("--inference-only", action="store_true", help="Skip training, run inference only")
     parser.add_argument("--batch-size", type=int, default=None, help="Override train batch size")
     parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
     parser.add_argument("--lr", type=float, default=None, help="Override learning rate")
     parser.add_argument("--t5-model", type=str, default=None, help="Override T5 model name")
-    parser.add_argument("--max-inference", type=int, default=50, help="Max images for inference")
     return parser.parse_args()
 
 
@@ -804,34 +640,23 @@ def main():
 
     train_ann = ANNOTATIONS_DIR / "coco_karpathy_train.json"
     val_ann = ANNOTATIONS_DIR / "coco_karpathy_val.json"
-    test_ann = ANNOTATIONS_DIR / "coco_karpathy_test.json"
 
     train_dataset = COCOKarpathyCaptionDataset(
         ann_path=str(train_ann), images_root=str(IMAGES_DIR),
         split="train", transform=train_transform, prompt=PROMPT,
     )
-    val_dataset_train_format = COCOKarpathyCaptionDataset(
+    val_dataset = COCOKarpathyCaptionDataset(
         ann_path=str(val_ann), images_root=str(IMAGES_DIR),
         split="val", transform=eval_transform, prompt=PROMPT,
-    )
-    val_dataset_eval = COCOKarpathyEvalDataset_(
-        ann_path=str(val_ann), images_root=str(IMAGES_DIR),
-        split="val", transform=eval_transform, prompt=PROMPT,
-    )
-    test_dataset_eval = COCOKarpathyEvalDataset_(
-        ann_path=str(test_ann), images_root=str(IMAGES_DIR),
-        split="test", transform=eval_transform, prompt=PROMPT,
     )
 
     train_image_count = len({sample["image"] for sample in train_dataset.samples})
-    val_image_count = len(val_dataset_eval)
-    test_image_count = len(test_dataset_eval)
+    val_image_count = len(val_dataset)
 
     logger.info(
         "Split counts | "
         f"train: {train_image_count} images / {len(train_dataset)} pairs | "
-        f"val: {val_image_count} images / {len(val_dataset_train_format)} pairs | "
-        f"test: {test_image_count} images"
+        f"val: {val_image_count} pairs"
     )
 
     train_loader = DataLoader(
@@ -839,48 +664,26 @@ def main():
         num_workers=NUM_WORKERS, pin_memory=True, collate_fn=collate_fn, drop_last=True,
     )
     val_loader = DataLoader(
-        val_dataset_train_format, batch_size=BATCH_SIZE_EVAL, shuffle=False,
+        val_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False,
         num_workers=NUM_WORKERS, pin_memory=True, collate_fn=collate_fn,
     )
-    val_eval_loader = DataLoader(
-        val_dataset_eval, batch_size=BATCH_SIZE_EVAL, shuffle=False,
-        num_workers=NUM_WORKERS, pin_memory=True, collate_fn=eval_collate_fn,
-    )
-    test_eval_loader = DataLoader(
-        test_dataset_eval, batch_size=BATCH_SIZE_EVAL, shuffle=False,
-        num_workers=NUM_WORKERS, pin_memory=True, collate_fn=eval_collate_fn,
-    )
 
-    logger.info(f"Train: {len(train_dataset)} samples | Val: {len(val_dataset_train_format)} | "
-                f"Val eval: {len(val_dataset_eval)} | Test eval: {len(test_dataset_eval)}")
+    logger.info(f"Train: {len(train_dataset)} samples | Val: {len(val_dataset)}")
 
     # ── Step 4: Build model ──
-    logger.info("\n[Step 5/6] Building model...")
+    logger.info("\n[Step 5/5] Building model...")
     model = build_model(device)
 
     # ── Step 5: Train ──
-    if not args.inference_only:
-        logger.info("\n[Step 6/6] Training...")
-        logger.info(f"Config: epochs={EPOCHS}, bs={BATCH_SIZE_TRAIN}, grad_accum={GRAD_ACCUM_STEPS}, "
-                     f"lr={LEARNING_RATE}, t5={T5_MODEL}")
-        train(model, train_loader, val_loader, device, args)
-    else:
-        if args.resume:
-            logger.info(f"Loading checkpoint for inference: {args.resume}")
-            ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-            model.load_state_dict(ckpt["model"], strict=False)
-
-    # ── Step 6: Inference ──
-    logger.info("\nRunning inference on validation set...")
-    run_inference(model, val_eval_loader, device, split_name="val", max_images=args.max_inference)
-
-    logger.info("\nRunning inference on test set...")
-    run_inference(model, test_eval_loader, device, split_name="test", max_images=args.max_inference)
+    logger.info("\n[Step 6/6] Training...")
+    logger.info(f"Config: epochs={EPOCHS}, bs={BATCH_SIZE_TRAIN}, grad_accum={GRAD_ACCUM_STEPS}, "
+                 f"lr={LEARNING_RATE}, t5={T5_MODEL}")
+    train(model, train_loader, val_loader, device, args)
 
     logger.info(f"\n{'='*60}")
-    logger.info("DONE!")
+    logger.info("Training complete!")
     logger.info(f"Checkpoints saved in: {OUTPUT_DIR}")
-    logger.info(f"Generated captions in: {OUTPUT_DIR / 'captions_*.json'}")
+    logger.info(f"Run inference with: python infer_coco_server.py --checkpoint {OUTPUT_DIR / 'best_model.pt'}")
     logger.info(f"{'='*60}")
 
 

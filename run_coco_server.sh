@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
+#
+# Usage:
+#   ./run_coco_server.sh train                          # train only
+#   ./run_coco_server.sh train --epochs 5               # train with overrides
+#   ./run_coco_server.sh infer --checkpoint path/to.pt  # inference only
+#   ./run_coco_server.sh all                            # train then infer on best model
+#   ./run_coco_server.sh                                # defaults to 'all'
 
 set -euo pipefail
 
 ENV_NAME="${ENV_NAME:-blip_source_env}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${REPO_DIR}/output/blip2_coco_pvt_lora"
 
 echo "Repo dir: ${REPO_DIR}"
 
@@ -30,9 +38,37 @@ python -m pip install \
     "timm==1.0.15" \
     kaggle
 
-echo
-echo "Starting COCO training / inference pipeline..."
-echo "The Python script will ask for your Kaggle username and API key if they are not already configured."
-echo
+MODE="${1:-all}"
+shift 2>/dev/null || true   # consume the mode arg; remaining args forwarded
 
-python train_coco_server.py "$@"
+case "${MODE}" in
+    train)
+        echo
+        echo "=== Starting COCO training ==="
+        python train_coco_server.py "$@"
+        ;;
+    infer|inference)
+        echo
+        echo "=== Starting COCO inference ==="
+        python infer_coco_server.py "$@"
+        ;;
+    all)
+        echo
+        echo "=== Starting COCO training ==="
+        python train_coco_server.py "$@"
+
+        BEST="${OUTPUT_DIR}/best_model.pt"
+        if [[ -f "${BEST}" ]]; then
+            echo
+            echo "=== Training done. Running inference on best model ==="
+            python infer_coco_server.py --checkpoint "${BEST}"
+        else
+            echo "Warning: best_model.pt not found at ${BEST}. Skipping inference."
+        fi
+        ;;
+    *)
+        echo "Unknown mode: ${MODE}"
+        echo "Usage: $0 {train|infer|all} [extra args...]"
+        exit 1
+        ;;
+esac
