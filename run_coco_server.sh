@@ -56,7 +56,8 @@ python -m pip install \
     tqdm \
     webdataset \
     kaggle \
-    "easydict==1.9"
+    "easydict==1.9" \
+    "numpy<2"
 
 MODE="${1:-all}"
 shift 2>/dev/null || true   # consume the mode arg; remaining args forwarded
