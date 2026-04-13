@@ -46,7 +46,7 @@ BATCH_SIZE_TRAIN    = 16          # per-GPU batch size (reduce if OOM)
 BATCH_SIZE_EVAL     = 32
 GRAD_ACCUM_STEPS    = 2           # effective batch = BATCH_SIZE_TRAIN * GRAD_ACCUM_STEPS
 NUM_WORKERS         = 4
-EPOCHS              = 5
+EPOCHS              = 10
 LEARNING_RATE       = 1e-4
 MIN_LR              = 1e-6
 WARMUP_STEPS        = 500
@@ -821,6 +821,17 @@ def main():
     test_dataset_eval = COCOKarpathyEvalDataset_(
         ann_path=str(test_ann), images_root=str(IMAGES_DIR),
         split="test", transform=eval_transform, prompt=PROMPT,
+    )
+
+    train_image_count = len({sample["image"] for sample in train_dataset.samples})
+    val_image_count = len(val_dataset_eval)
+    test_image_count = len(test_dataset_eval)
+
+    logger.info(
+        "Split counts | "
+        f"train: {train_image_count} images / {len(train_dataset)} pairs | "
+        f"val: {val_image_count} images / {len(val_dataset_train_format)} pairs | "
+        f"test: {test_image_count} images"
     )
 
     train_loader = DataLoader(
