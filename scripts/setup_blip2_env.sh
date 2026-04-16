@@ -59,79 +59,104 @@ echo "Env: ${ENV_NAME} | GPU available: ${HAS_GPU} | CUDA: ${CUDA_VER}"
 # Recreate env if requested
 if conda env list | awk '{print $1}' | grep -xq "${ENV_NAME}"; then
   if [[ ${FORCE_RECREATE} -eq 1 ]]; then
-    echo "Removing existing environment ${ENV_NAME}..."
-    mamba env remove -n "${ENV_NAME}" -y || conda env remove -n "${ENV_NAME}" -y
-  else
-    echo "Environment ${ENV_NAME} already exists — will reuse it. Use --force to recreate."
-  fi
-fi
+    echo "Verifying PyTorch and BLIP2 imports..."
+    python - <<'PY'
+    import sys,traceback
+    ok = True
+    try:
+        import torch
+        print('torch', torch.__version__, 'cuda available=', torch.cuda.is_available())
+    except Exception:
+        traceback.print_exc()
+        ok = False
 
-# Create environment if not exists
-if ! conda env list | awk '{print $1}' | grep -xq "${ENV_NAME}"; then
-  echo "Creating conda environment ${ENV_NAME} (python=3.10)..."
-  mamba create -n "${ENV_NAME}" python=3.10 -y
-fi
+    try:
+        from lavis.models.blip2_models.blip2_t5 import Blip2T5
+        print('BLIP2 import OK')
+    except Exception:
+        traceback.print_exc()
+        ok = False
 
-echo "Activating ${ENV_NAME}..."
-conda activate "${ENV_NAME}"
+    if not ok:
+        sys.exit(2)
+    sys.exit(0)
+    PY
 
-# Install PyTorch
-if [[ ${HAS_GPU} -eq 1 ]] && [[ ${PREF_CPU} -eq 0 ]]; then
-  echo "Installing PyTorch GPU build with CUDA ${CUDA_VER}..."
-  mamba install -y -c pytorch -c nvidia pytorch torchvision torchaudio "pytorch-cuda=${CUDA_VER}"
-else
-  echo "Installing PyTorch CPU-only build..."
-  mamba install -y -c pytorch pytorch torchvision torchaudio cpuonly
-fi
+    RET=$?
+    if [[ $RET -ne 0 ]]; then
+      echo "Initial verification failed. Attempting automatic repair..."
 
-echo "Installing repository (editable) and COCO workflow deps via pip..."
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e "${REPO_DIR}" --no-deps
+      echo "Removing potentially conflicting OpenMP/MKL packages (intel-openmp libiomp mkl mkl-service)..."
+      mamba remove -y intel-openmp libiomp mkl mkl-service || true
 
-python -m pip install \
-  contexttimer \
-  decord \
-  "einops>=0.4.1" \
-  fairscale==0.4.4 \
-  ftfy \
-  iopath \
-  omegaconf \
-  opencv-python-headless==4.5.5.64 \
-  packaging \
-  pandas \
-  pycocoevalcap \
-  pycocotools \
-  pyyaml_env_tag==0.1 \
-  scikit-image \
-  sentencepiece \
-  "transformers==4.46.2" \
-  "peft==0.13.2" \
-  "timm==1.0.15" \
-  tqdm \
-  webdataset \
-  kaggle \
-  easydict==1.9 \
-  "numpy<2"
+      echo "Removing existing PyTorch packages..."
+      mamba remove -y pytorch torchvision torchaudio "pytorch-cuda*" || true
 
-echo "Verifying PyTorch and BLIP2 imports..."
-python - <<'PY'
-import sys
-try:
-    import torch
-    print('torch', torch.__version__, 'cuda available=', torch.cuda.is_available())
-except Exception as e:
-    print('ERROR importing torch:', e)
-    sys.exit(2)
+      echo "Reinstalling PyTorch (${HAS_GPU} -> GPU=1/CPU=0)..."
+      if [[ ${HAS_GPU} -eq 1 ]]; then
+        mamba install -y -c pytorch -c nvidia pytorch torchvision torchaudio "pytorch-cuda=${CUDA_VER}" || true
+      else
+        mamba install -y -c pytorch pytorch torchvision torchaudio cpuonly || true
+      fi
 
-try:
-    from lavis.models.blip2_models.blip2_t5 import Blip2T5
-    print('BLIP2 import OK')
-except Exception as e:
-    print('ERROR importing BLIP2:', e)
-    sys.exit(3)
-PY
+      echo "Re-running verification after repair..."
+      python - <<'PY'
+    import sys,traceback
+    ok = True
+    try:
+        import torch
+        print('torch', torch.__version__, 'cuda available=', torch.cuda.is_available())
+    except Exception:
+        traceback.print_exc()
+        ok = False
 
-echo "Setup finished. If verification succeeded, you can start training with:"
-echo "  tmux new -s coco_train && conda activate ${ENV_NAME} && export KAGGLE_USERNAME=your_user && export KAGGLE_KEY=your_key && cd ${REPO_DIR} && ./run_coco_server.sh train"
+    try:
+        from lavis.models.blip2_models.blip2_t5 import Blip2T5
+        print('BLIP2 import OK')
+    except Exception:
+        traceback.print_exc()
+        ok = False
 
-exit 0
+    if not ok:
+        sys.exit(2)
+    sys.exit(0)
+    PY
+
+      RET2=$?
+      if [[ $RET2 -ne 0 ]]; then
+        echo "Repair reinstall did not fix import. Trying LD_PRELOAD workaround..."
+        CONDA_PREFIX_ACT=$(conda info --base)/envs/${ENV_NAME}
+        LIBIOMP_PATH=$(find "$CONDA_PREFIX_ACT" -name 'libiomp*.so' | head -n1 || true)
+        if [[ -n "$LIBIOMP_PATH" ]]; then
+          echo "Found libiomp at: $LIBIOMP_PATH. Testing LD_PRELOAD..."
+          LD_PRELOAD="$LIBIOMP_PATH" python - <<'PY'
+    import sys,traceback
+    try:
+        import torch
+        print('torch', torch.__version__, 'cuda available=', torch.cuda.is_available())
+        sys.exit(0)
+    except Exception:
+        traceback.print_exc()
+        sys.exit(3)
+    PY
+          if [[ $? -eq 0 ]]; then
+            echo "LD_PRELOAD workaround fixed the import. Creating activate.d to set LD_PRELOAD on env activation."
+            ACT_DIR="$CONDA_PREFIX_ACT/etc/conda/activate.d"
+            mkdir -p "$ACT_DIR"
+            echo "export LD_PRELOAD=\"$LIBIOMP_PATH\"" > "$ACT_DIR/ld_preload.sh"
+            echo "Wrote $ACT_DIR/ld_preload.sh"
+          else
+            echo "LD_PRELOAD test failed. Manual inspection required. See setup log for details."
+          fi
+        else
+          echo "No libiomp found in env; unable to try LD_PRELOAD workaround. Manual fix required."
+        fi
+        echo "Setup finished with errors — PyTorch import still failing. Inspect and retry." >&2
+        exit 3
+      fi
+    fi
+
+    echo "Setup finished successfully. You can start training with:"
+    echo "  tmux new -s coco_train && conda activate ${ENV_NAME} && export KAGGLE_USERNAME=your_user && export KAGGLE_KEY=your_key && cd ${REPO_DIR} && ./run_coco_server.sh train"
+
+    exit 0
