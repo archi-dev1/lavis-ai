@@ -80,7 +80,7 @@ if conda env list | awk '{print $1}' | grep -xq "${ENV_NAME}"; then
     if not ok:
         sys.exit(2)
     sys.exit(0)
-    PY
+PY
 
     RET=$?
     if [[ $RET -ne 0 ]]; then
@@ -120,7 +120,7 @@ if conda env list | awk '{print $1}' | grep -xq "${ENV_NAME}"; then
     if not ok:
         sys.exit(2)
     sys.exit(0)
-    PY
+PY
 
       RET2=$?
       if [[ $RET2 -ne 0 ]]; then
@@ -138,7 +138,7 @@ if conda env list | awk '{print $1}' | grep -xq "${ENV_NAME}"; then
     except Exception:
         traceback.print_exc()
         sys.exit(3)
-    PY
+PY
           if [[ $? -eq 0 ]]; then
             echo "LD_PRELOAD workaround fixed the import. Creating activate.d to set LD_PRELOAD on env activation."
             ACT_DIR="$CONDA_PREFIX_ACT/etc/conda/activate.d"
@@ -155,8 +155,10 @@ if conda env list | awk '{print $1}' | grep -xq "${ENV_NAME}"; then
         exit 3
       fi
     fi
+  fi
 
-    echo "Setup finished successfully. You can start training with:"
+  echo "Setup finished successfully. You can start training with:"
     echo "  tmux new -s coco_train && conda activate ${ENV_NAME} && export KAGGLE_USERNAME=your_user && export KAGGLE_KEY=your_key && cd ${REPO_DIR} && ./run_coco_server.sh train"
 
     exit 0
+  fi
